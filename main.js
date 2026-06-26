@@ -4,7 +4,8 @@ const ffmpegStatic = require('ffmpeg-static');
 const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
 const path = require('path');
 const fs = require('fs');
-const { exec } = require('child_process');
+const os = require('os');
+const { exec, spawn } = require('child_process');
 
 const ffmpegPath = app.isPackaged
     ? path.join(process.resourcesPath, 'bin', 'win', 'ffmpeg.exe')
@@ -20,6 +21,7 @@ ffmpeg.setFfprobePath(ffprobePath);
 let mainWindow;
 let activeCommand = null;
 let activeReject = null;
+let activeCleanup = null;
 
 const FORMAT_EXTENSIONS = {
     mp4: '.mp4',
@@ -82,6 +84,52 @@ function sendCompletionNotification(outputPath) {
         title: 'Video upscale complete',
         body: `Saved to ${path.basename(outputPath)}`,
     }).show();
+}
+
+function getRealEsrganPaths() {
+    const basePath = app.isPackaged
+        ? path.join(process.resourcesPath, 'bin', 'win')
+        : path.join(__dirname, 'bin', 'win');
+
+    return {
+        executable: path.join(basePath, 'realesrgan-ncnn-vulkan.exe'),
+        models: path.join(basePath, 'models'),
+    };
+}
+
+function detectVulkanGPU() {
+    return new Promise((resolve) => {
+        const { executable } = getRealEsrganPaths();
+        if (!fs.existsSync(executable)) {
+            return resolve({ supported: false, device: 'cpu', available: false });
+        }
+
+        exec(`"${executable}" -h`, (error, stdout, stderr) => {
+            const output = `${stdout || ''}${stderr || ''}`;
+            if (output.includes('gpu-id')) {
+                resolve({ supported: true, device: 'vulkan', available: true });
+            } else {
+                resolve({ supported: false, device: 'cpu', available: true });
+            }
+        });
+    });
+}
+
+function parseFps(rate) {
+    const [num, den] = String(rate || '24/1').split('/').map(Number);
+    if (Number.isFinite(num) && Number.isFinite(den) && den > 0) return num / den;
+    if (Number.isFinite(num) && num > 0) return num;
+    return 24;
+}
+
+function safeFramePercent(frames, totalFrames) {
+    if (!Number.isFinite(totalFrames) || totalFrames <= 0) return 0;
+    return Math.max(0, Math.min(99, Math.floor((Number(frames || 0) / totalFrames) * 100)));
+}
+
+function sendAiProgress(stage, percent, detail = '') {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('ai-upscale-progress', { stage, percent, detail });
 }
 
 
@@ -178,6 +226,11 @@ ipcMain.handle('detect-hardware', async () => {
     return hw.type;
 });
 
+ipcMain.handle('detect-vulkan', async () => {
+    return await detectVulkanGPU();
+});
+
+
 // Probe a file for duration and stream info using ffprobe.
 // Returns { duration, width, height } — all optional if probe fails.
 ipcMain.handle('probe-file', async (event, filePath) => {
@@ -199,14 +252,146 @@ ipcMain.handle('cancel-upscale', async () => {
     if (!activeCommand) return { canceled: false };
     activeCommand.kill('SIGTERM');
     if (activeReject) activeReject('Processing canceled.');
+    if (activeCleanup) activeCleanup();
     activeCommand = null;
     activeReject = null;
+    activeCleanup = null;
     return { canceled: true };
 });
 
 ipcMain.handle('open-output-folder', async (event, outputPath) => {
     if (!outputPath) return;
     await shell.showItemInFolder(outputPath);
+});
+
+ipcMain.handle('ai-upscale-video', async (event, {
+    inputPath, modelName, codecPreference, outputPath, outputFormat
+}) => {
+    return new Promise(async (resolve, reject) => {
+        if (activeCommand) return reject('Another upscale is already running.');
+
+        const allowedModels = new Set(['realesrgan-x4plus', 'realesrgan-x4plus-anime']);
+        if (!allowedModels.has(modelName)) return reject('Unsupported AI model selected.');
+
+        const finalOutputPath = outputPath || incrementPath(defaultOutputPath(inputPath, outputFormat));
+        const outputDir = path.dirname(finalOutputPath);
+        if (!fs.existsSync(outputDir)) return reject('The selected output folder does not exist.');
+        if (fs.existsSync(finalOutputPath)) return reject('The output file already exists. Choose a different filename.');
+
+        const { executable: esrganPath, models: modelsPath } = getRealEsrganPaths();
+        if (!fs.existsSync(esrganPath)) return reject('Real-ESRGAN binary was not found in bin/win. Install realesrgan-ncnn-vulkan.exe before using AI upscale.');
+        if (!fs.existsSync(modelsPath)) return reject('Real-ESRGAN models folder was not found in bin/win/models.');
+
+        const tmpBase = path.join(os.tmpdir(), `esrgan_${process.pid}_${Date.now()}`);
+        const framesDir = path.join(tmpBase, 'frames');
+        const upscaledDir = path.join(tmpBase, 'upscaled');
+        const audioPath = path.join(tmpBase, 'audio.mka');
+
+        function cleanup() {
+            try { fs.rmSync(tmpBase, { recursive: true, force: true }); } catch (err) { console.warn('[AI cleanup]', err); }
+        }
+
+        try {
+            fs.mkdirSync(framesDir, { recursive: true });
+            fs.mkdirSync(upscaledDir, { recursive: true });
+            activeCleanup = cleanup;
+            activeReject = reject;
+
+            sendAiProgress('probing', 0, 'Reading file info...');
+            const probeData = await new Promise((res, rej) => {
+                ffmpeg.ffprobe(inputPath, (err, meta) => {
+                    if (err) return rej(err);
+                    const videoStream = meta.streams?.find(s => s.codec_type === 'video');
+                    const duration = Number(meta.format?.duration ?? 0);
+                    const fps = parseFps(videoStream?.avg_frame_rate || videoStream?.r_frame_rate);
+                    const totalFrames = Number(videoStream?.nb_frames) || Math.ceil(duration * fps) || 1;
+                    res({ fps, totalFrames });
+                });
+            });
+            const { fps, totalFrames } = probeData;
+
+            sendAiProgress('extracting', 0, 'Extracting frames...');
+            await new Promise((res, rej) => {
+                activeCommand = ffmpeg(inputPath)
+                    .outputOptions(['-q:v 1', '-qmin 1', '-an'])
+                    .output(path.join(framesDir, 'frame%08d.jpg'))
+                    .on('progress', (p) => sendAiProgress('extracting', safeFramePercent(p.frames, totalFrames), `Extracting frame ${p.frames || 0} of ${totalFrames}`))
+                    .on('end', res)
+                    .on('error', rej);
+                activeCommand.run();
+            });
+            activeCommand = null;
+
+            await new Promise((res) => {
+                const audioCommand = ffmpeg(inputPath)
+                    .outputOptions(['-vn', '-map 0:a:0?', '-c:a copy'])
+                    .output(audioPath)
+                    .on('end', res)
+                    .on('error', res);
+                audioCommand.run();
+            });
+
+            sendAiProgress('upscaling', 0, 'Starting AI upscale...');
+            await new Promise((res, rej) => {
+                const args = ['-i', framesDir, '-o', upscaledDir, '-n', modelName, '-m', modelsPath, '-f', 'jpg', '-g', '0'].map(String);
+                const proc = spawn(esrganPath, args, { windowsHide: true });
+                activeCommand = proc;
+                let lastPct = 0;
+                proc.stderr.on('data', (data) => {
+                    const match = data.toString().match(/([\d.]+)%/);
+                    if (!match) return;
+                    const pct = Math.min(Math.floor(parseFloat(match[1])), 99);
+                    if (pct !== lastPct) {
+                        lastPct = pct;
+                        sendAiProgress('upscaling', pct, `Upscaling frame ${Math.floor((pct / 100) * totalFrames)} of ${totalFrames}`);
+                    }
+                });
+                proc.on('error', rej);
+                proc.on('close', (code) => code === 0 ? res() : rej(new Error(`Real-ESRGAN exited with code ${code}`)));
+            });
+            activeCommand = null;
+
+            sendAiProgress('assembling', 0, 'Reassembling video...');
+            const useH265 = codecPreference === 'h265';
+            const audioExists = fs.existsSync(audioPath) && fs.statSync(audioPath).size > 0;
+            await new Promise((res, rej) => {
+                let cmd = ffmpeg()
+                    .input(path.join(upscaledDir, 'frame%08d.jpg'))
+                    .inputOptions([`-framerate ${fps}`]);
+                if (audioExists) cmd = cmd.input(audioPath);
+
+                activeCommand = cmd
+                    .videoCodec(useH265 ? 'libx265' : 'libx264')
+                    .outputOptions([
+                        `-crf ${useH265 ? '20' : '17'}`,
+                        '-preset slow',
+                        '-pix_fmt yuv420p',
+                        audioExists ? '-c:a copy' : '-an',
+                        '-movflags +faststart',
+                    ])
+                    .output(finalOutputPath)
+                    .on('progress', (p) => sendAiProgress('assembling', safeFramePercent(p.frames, totalFrames), `Encoding frame ${p.frames || 0} of ${totalFrames}`))
+                    .on('end', res)
+                    .on('error', rej);
+                activeCommand.run();
+            });
+
+            activeCommand = null;
+            activeReject = null;
+            activeCleanup = null;
+            sendAiProgress('done', 100, 'Complete');
+            cleanup();
+            sendCompletionNotification(finalOutputPath);
+            shell.showItemInFolder(finalOutputPath);
+            resolve({ success: true, outputPath: finalOutputPath });
+        } catch (err) {
+            activeCommand = null;
+            activeReject = null;
+            activeCleanup = null;
+            cleanup();
+            reject(err?.message || String(err));
+        }
+    });
 });
 
 

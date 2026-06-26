@@ -70,6 +70,31 @@
             <p class="field-hint">H.265 = smaller files &nbsp;·&nbsp; H.264 = wider compatibility</p>
         </div>
 
+          <div class="sidebar-divider"></div>
+
+        <div class="field-group">
+            <label class="field-label">Upscale Method</label>
+            <div class="seg-control">
+                <label class="seg-option">
+                    <input type="radio" name="upscaleMode" value="standard" checked>
+                    <span>Standard</span>
+                </label>
+                <label class="seg-option">
+                    <input type="radio" name="upscaleMode" value="ai">
+                    <span>AI</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="field-group" id="aiOptions" style="display:none">
+            <label class="field-label" for="aiModel">Model</label>
+            <select id="aiModel" class="select-control">
+                <option value="realesrgan-x4plus">Real-ESRGAN x4 — Photo</option>
+                <option value="realesrgan-x4plus-anime">Real-ESRGAN x4 — Anime</option>
+            </select>
+            <p class="field-hint" id="vulkanStatus"></p>
+        </div>
+
         <div class="field-group">
             <label class="field-label">Audio</label>
             <div class="seg-control">
@@ -176,7 +201,7 @@
             <h2 class="section-label">Output</h2>
             <div class="progress-card">
                 <div class="progress-header">
-                    <span class="progress-label">Processing</span>
+                      <span class="progress-label" id="progressLabel">Processing</span>
                     <span class="progress-pct" id="progressText">0%</span>
                 </div>
                 <div class="progress-track">
@@ -193,7 +218,7 @@
                 <button id="cancelBtn" class="secondary-btn danger" disabled>Cancel</button>
                 <button id="openOutputBtn" class="secondary-btn" disabled>Open output folder</button>
             </div>
-            
+
             <p class="status-message" id="status"></p>
         </section>
 

@@ -15,8 +15,8 @@ const warningBanner = document.getElementById('warningBanner');
 const progressFill  = document.getElementById('progressFill');
 const progressText  = document.getElementById('progressText');
 const progressInfo  = document.getElementById('progressInfo');
+const progressLabel = document.getElementById('progressLabel');
 const statusEl      = document.getElementById('status');
-
 const infoName     = document.getElementById('infoName');
 const infoDuration = document.getElementById('infoDuration');
 const infoRes      = document.getElementById('infoRes');
@@ -51,6 +51,57 @@ ipcRenderer.invoke('detect-hardware').then(hw => {
         hwStatus.style.color = hw === 'cpu' ? 'var(--text-hint)' : 'var(--success-text)';
     }
 });
+
+window._vulkanSupported = false;
+ipcRenderer.invoke('detect-vulkan').then(vulkan => {
+    window._vulkanSupported = Boolean(vulkan?.supported);
+    updateVulkanStatus();
+}).catch(() => {
+    window._vulkanSupported = false;
+    updateVulkanStatus();
+});
+
+
+function updateVulkanStatus() {
+    const vulkanStatus = document.getElementById('vulkanStatus');
+    if (!vulkanStatus) return;
+    vulkanStatus.textContent = window._vulkanSupported
+        ? '● GPU acceleration available'
+        : '○ No Vulkan GPU — will use CPU (slow)';
+    vulkanStatus.style.color = window._vulkanSupported
+        ? 'var(--success-text)'
+        : 'var(--text-hint)';
+}
+
+document.querySelectorAll('input[name="upscaleMode"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        const aiOptions = document.getElementById('aiOptions');
+        const isAI = e.target.value === 'ai';
+        if (aiOptions) aiOptions.style.display = isAI ? 'block' : 'none';
+        if (isAI) updateVulkanStatus();
+    });
+});
+
+const STAGE_LABELS = {
+    probing: 'Reading file...',
+    extracting: 'Extracting frames',
+    upscaling: 'AI upscaling',
+    assembling: 'Reassembling video',
+    done: 'Complete',
+};
+const STAGE_OFFSETS = { probing: 0, extracting: 5, upscaling: 15, assembling: 85, done: 100 };
+const STAGE_RANGES = { probing: 5, extracting: 10, upscaling: 70, assembling: 15, done: 0 };
+
+ipcRenderer.on('ai-upscale-progress', (event, { stage, percent, detail }) => {
+    const offset = STAGE_OFFSETS[stage] ?? 0;
+    const range = STAGE_RANGES[stage] ?? 100;
+    const overall = stage === 'done' ? 100 : Math.floor(offset + (Number(percent || 0) / 100) * range);
+    progressFill.style.width = `${overall}%`;
+    progressText.textContent = `${overall}%`;
+    if (progressLabel) progressLabel.textContent = STAGE_LABELS[stage] ?? stage;
+    progressInfo.textContent = detail || '';
+});
+
 
 // ── File handling ──
 let selectedFilePath = null;
@@ -100,6 +151,11 @@ function formatDuration(seconds) {
     if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+function selectedUpscaleMode() {
+    return document.querySelector('input[name="upscaleMode"]:checked')?.value ?? 'standard';
+}
+
 
 function resetOutputSelection() {
     selectedOutputPath = null;
@@ -227,6 +283,7 @@ ipcRenderer.on('upscale-progress', (event, { percent, currentFps, timemark }) =>
     } else {
         progressInfo.textContent = '';
     }
+    if (progressLabel) progressLabel.textContent = 'Processing';
 });
 
 // ── Status helper ──
@@ -244,11 +301,13 @@ upscaleBtn.addEventListener('click', async () => {
         return;
     }
 
-     if (!validateTargetResolution()) return;
+    const isAI = selectedUpscaleMode() === 'ai';
+    if (!isAI && !validateTargetResolution()) return;
 
     progressFill.style.width = '0%';
     progressText.textContent = '0%';
     progressInfo.textContent = '';
+    if (progressLabel) progressLabel.textContent = 'Processing';
     if (warningBanner) warningBanner.hidden = true;
     setStatus('', '');
     upscaleBtn.disabled = true;
@@ -262,20 +321,28 @@ upscaleBtn.addEventListener('click', async () => {
      const audioMode        = document.querySelector('input[name="audio"]:checked')?.value ?? 'copy';
 
     try {
-        const result = await ipcRenderer.invoke('upscale-video', {
-            inputPath:       selectedFilePath,
-            resolution:      document.getElementById('resolution').value,
-            denoiseStrength: parseFloat(document.getElementById('denoise').value),
-            sharpenStrength: parseFloat(document.getElementById('sharpen').value),
-            accelerationMode,
-            codecPreference,
-              audioMode,
-            outputFormat: document.getElementById('outputFormat').value,
-            outputPath: selectedOutputPath,
-            crf: parseInt(document.getElementById('quality').value, 10),
-            sourceWidth: sourceInfo.width,
-            sourceHeight: sourceInfo.height,
-        });
+          const result = isAI
+            ? await ipcRenderer.invoke('ai-upscale-video', {
+                inputPath: selectedFilePath,
+                modelName: document.getElementById('aiModel').value,
+                codecPreference,
+                outputFormat: document.getElementById('outputFormat').value,
+                outputPath: selectedOutputPath,
+            })
+            : await ipcRenderer.invoke('upscale-video', {
+                inputPath:       selectedFilePath,
+                resolution:      document.getElementById('resolution').value,
+                denoiseStrength: parseFloat(document.getElementById('denoise').value),
+                sharpenStrength: parseFloat(document.getElementById('sharpen').value),
+                accelerationMode,
+                codecPreference,
+                audioMode,
+                outputFormat: document.getElementById('outputFormat').value,
+                outputPath: selectedOutputPath,
+                crf: parseInt(document.getElementById('quality').value, 10),
+                sourceWidth: sourceInfo.width,
+                sourceHeight: sourceInfo.height,
+            });
           lastOutputPath = result.outputPath;
         selectedOutputPath = result.outputPath;
         outputPathEl.textContent = result.outputPath;
