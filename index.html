@@ -92,6 +92,15 @@
                 <option value="realesrgan-x4plus">Real-ESRGAN x4 — Photo</option>
                 <option value="realesrgan-x4plus-anime">Real-ESRGAN x4 — Anime</option>
             </select>
+
+             <label class="field-label" for="vulkanGpu">GPU Device</label>
+            <select id="vulkanGpu" class="select-control">
+                <option value="auto" selected>Auto (prefer NVIDIA)</option>
+                <option value="0">Device 0</option>
+                <option value="1">Device 1</option>
+                <option value="2">Device 2</option>
+            </select>
+            
             <p class="field-hint" id="vulkanStatus"></p>
         </div>
 

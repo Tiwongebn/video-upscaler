@@ -53,11 +53,14 @@ ipcRenderer.invoke('detect-hardware').then(hw => {
 });
 
 window._vulkanSupported = false;
+window._preferredVulkanGpuId = '0';
 ipcRenderer.invoke('detect-vulkan').then(vulkan => {
     window._vulkanSupported = Boolean(vulkan?.supported);
+     window._preferredVulkanGpuId = vulkan?.preferredGpuId ?? '0';
     updateVulkanStatus();
 }).catch(() => {
     window._vulkanSupported = false;
+    window._preferredVulkanGpuId = '0';
     updateVulkanStatus();
 });
 
@@ -66,7 +69,7 @@ function updateVulkanStatus() {
     const vulkanStatus = document.getElementById('vulkanStatus');
     if (!vulkanStatus) return;
     vulkanStatus.textContent = window._vulkanSupported
-        ? '● GPU acceleration available'
+         ? `● GPU acceleration available — Auto will use device ${window._preferredVulkanGpuId}`
         : '○ No Vulkan GPU — will use CPU (slow)';
     vulkanStatus.style.color = window._vulkanSupported
         ? 'var(--success-text)'
@@ -328,6 +331,7 @@ upscaleBtn.addEventListener('click', async () => {
                 codecPreference,
                 outputFormat: document.getElementById('outputFormat').value,
                 outputPath: selectedOutputPath,
+                vulkanGpuId: document.getElementById('vulkanGpu').value,
             })
             : await ipcRenderer.invoke('upscale-video', {
                 inputPath:       selectedFilePath,

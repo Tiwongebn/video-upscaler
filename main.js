@@ -97,6 +97,21 @@ function getRealEsrganPaths() {
     };
 }
 
+function detectNvidiaGpu() {
+    return new Promise((resolve) => {
+        exec('nvidia-smi -L', { windowsHide: true }, (error, stdout) => {
+            resolve(!error && /GPU\s+\d+:/i.test(stdout || ''));
+        });
+    });
+}
+
+function preferredVulkanGpuId(hasNvidiaGpu) {
+    // On many hybrid laptops the integrated GPU is Vulkan device 0 and
+    // the NVIDIA dGPU is device 1. Keep single/non-NVIDIA systems on 0.
+    return hasNvidiaGpu ? '1' : '0';
+}
+
+
 function detectVulkanGPU() {
     return new Promise((resolve) => {
         const { executable } = getRealEsrganPaths();
@@ -104,12 +119,19 @@ function detectVulkanGPU() {
             return resolve({ supported: false, device: 'cpu', available: false });
         }
 
-        exec(`"${executable}" -h`, (error, stdout, stderr) => {
+         exec(`"${executable}" -h`, async (error, stdout, stderr) => {
             const output = `${stdout || ''}${stderr || ''}`;
+              const hasNvidiaGpu = await detectNvidiaGpu();
             if (output.includes('gpu-id')) {
-                resolve({ supported: true, device: 'vulkan', available: true });
+                 resolve({
+                    supported: true,
+                    device: 'vulkan',
+                    available: true,
+                    hasNvidiaGpu,
+                    preferredGpuId: preferredVulkanGpuId(hasNvidiaGpu),
+                });
             } else {
-                resolve({ supported: false, device: 'cpu', available: true });
+                resolve({ supported: false, device: 'cpu', available: true, hasNvidiaGpu });
             }
         });
     });
@@ -265,13 +287,19 @@ ipcMain.handle('open-output-folder', async (event, outputPath) => {
 });
 
 ipcMain.handle('ai-upscale-video', async (event, {
-    inputPath, modelName, codecPreference, outputPath, outputFormat
+     inputPath, modelName, codecPreference, outputPath, outputFormat, vulkanGpuId
 }) => {
     return new Promise(async (resolve, reject) => {
         if (activeCommand) return reject('Another upscale is already running.');
 
         const allowedModels = new Set(['realesrgan-x4plus', 'realesrgan-x4plus-anime']);
         if (!allowedModels.has(modelName)) return reject('Unsupported AI model selected.');
+
+          const normalizedGpuId = String(vulkanGpuId ?? 'auto');
+        const selectedGpuId = normalizedGpuId === 'auto'
+            ? preferredVulkanGpuId(await detectNvidiaGpu())
+            : normalizedGpuId;
+        if (!/^\d+$/.test(selectedGpuId)) return reject('Invalid Vulkan GPU device selected.');
 
         const finalOutputPath = outputPath || incrementPath(defaultOutputPath(inputPath, outputFormat));
         const outputDir = path.dirname(finalOutputPath);
@@ -333,7 +361,8 @@ ipcMain.handle('ai-upscale-video', async (event, {
 
             sendAiProgress('upscaling', 0, 'Starting AI upscale...');
             await new Promise((res, rej) => {
-                const args = ['-i', framesDir, '-o', upscaledDir, '-n', modelName, '-m', modelsPath, '-f', 'jpg', '-g', '0'].map(String);
+                  console.log(`[Real-ESRGAN] Vulkan GPU device: ${selectedGpuId}`);
+                const args = ['-i', framesDir, '-o', upscaledDir, '-n', modelName, '-m', modelsPath, '-f', 'jpg', '-g', selectedGpuId].map(String);
                 const proc = spawn(esrganPath, args, { windowsHide: true });
                 activeCommand = proc;
                 let lastPct = 0;
