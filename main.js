@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegStatic = require('ffmpeg-static');
 const ffprobeInstaller = require('@ffprobe-installer/ffprobe');
 const path = require('path');
+const fs = require('fs');
 const { exec } = require('child_process');
 
 const ffmpegPath = app.isPackaged
@@ -17,6 +18,13 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 
 let mainWindow;
+let activeCommand = null;
+let activeReject = null;
+
+const FORMAT_EXTENSIONS = {
+    mp4: '.mp4',
+    mkv: '.mkv',
+};
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -33,6 +41,49 @@ function createWindow() {
     });
     mainWindow.loadFile('index.html');
 }
+
+function getOutputExtension(inputPath, outputFormat = 'source') {
+    if (outputFormat === 'source') return path.extname(inputPath) || '.mp4';
+    return FORMAT_EXTENSIONS[outputFormat] ?? path.extname(inputPath) ?? '.mp4';
+}
+
+function defaultOutputPath(inputPath, outputFormat = 'source') {
+    const parsed = path.parse(inputPath);
+    return path.join(parsed.dir, `${parsed.name}_upscaled${getOutputExtension(inputPath, outputFormat)}`);
+}
+
+function incrementPath(filePath) {
+    if (!fs.existsSync(filePath)) return filePath;
+    const parsed = path.parse(filePath);
+    let index = 1;
+    let candidate;
+    do {
+        candidate = path.join(parsed.dir, `${parsed.name}_${index}${parsed.ext}`);
+        index += 1;
+    } while (fs.existsSync(candidate));
+    return candidate;
+}
+
+function parseResolution(resolution) {
+    const [width, height] = String(resolution).split(':').map(Number);
+    return { width, height };
+}
+
+function isTargetHigher(sourceWidth, sourceHeight, resolution) {
+    const target = parseResolution(resolution);
+    return Number.isFinite(target.width) && Number.isFinite(target.height)
+        && target.width > Number(sourceWidth)
+        && target.height > Number(sourceHeight);
+}
+
+function sendCompletionNotification(outputPath) {
+    if (!Notification.isSupported()) return;
+    new Notification({
+        title: 'Video upscale complete',
+        body: `Saved to ${path.basename(outputPath)}`,
+    }).show();
+}
+
 
 // ── Hardware detection ──
 // Returns { type, hevcNvencAvailable, hevcQsvAvailable }
@@ -112,6 +163,16 @@ ipcMain.handle('select-file', async () => {
     return canceled ? null : filePaths[0];
 });
 
+ipcMain.handle('select-output', async (event, { inputPath, outputFormat }) => {
+    const ext = getOutputExtension(inputPath, outputFormat).replace('.', '');
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: incrementPath(defaultOutputPath(inputPath, outputFormat)),
+        filters: [{ name: `${ext.toUpperCase()} video`, extensions: [ext] }]
+    });
+    return canceled ? null : filePath;
+});
+
+
 ipcMain.handle('detect-hardware', async () => {
     const hw = await detectHardwareAcceleration();
     return hw.type;
@@ -134,13 +195,38 @@ ipcMain.handle('probe-file', async (event, filePath) => {
     });
 });
 
+ipcMain.handle('cancel-upscale', async () => {
+    if (!activeCommand) return { canceled: false };
+    activeCommand.kill('SIGTERM');
+    if (activeReject) activeReject('Processing canceled.');
+    activeCommand = null;
+    activeReject = null;
+    return { canceled: true };
+});
+
+ipcMain.handle('open-output-folder', async (event, outputPath) => {
+    if (!outputPath) return;
+    await shell.showItemInFolder(outputPath);
+});
+
+
 ipcMain.handle('upscale-video', async (event, {
     inputPath, resolution, denoiseStrength, sharpenStrength,
-    accelerationMode, codecPreference
+    accelerationMode, codecPreference, outputPath, audioMode,
+    outputFormat, crf, sourceWidth, sourceHeight
 }) => {
     return new Promise(async (resolve, reject) => {
-        const ext        = path.extname(inputPath);
-        const outputPath = inputPath.replace(ext, `_upscaled${ext}`);
+         if (activeCommand) return reject('Another upscale is already running.');
+
+        const finalOutputPath = outputPath || incrementPath(defaultOutputPath(inputPath, outputFormat));
+        const outputDir = path.dirname(finalOutputPath);
+        if (!fs.existsSync(outputDir)) return reject('The selected output folder does not exist.');
+        if (fs.existsSync(finalOutputPath)) return reject('The output file already exists. Choose a different filename.');
+        if (sourceWidth && sourceHeight && !isTargetHigher(sourceWidth, sourceHeight, resolution)) {
+            return reject('Target resolution must be higher than the source resolution.');
+        }
+
+        activeReject = reject;
 
         // Resolve hardware profile
         let hw;
@@ -150,6 +236,7 @@ ipcMain.handle('upscale-video', async (event, {
         } else if (accelerationMode === 'hardware') {
             hw = await detectHardwareAcceleration();
             if (hw.type === 'cpu') {
+                  activeReject = null;
                 return reject('Hardware acceleration was selected, but no compatible GPU encoder was detected. Switch to Auto or CPU.');
             }
             console.log(`[FFmpeg] Mode: Hardware (user forced) → detected: ${hw.type}`);
@@ -161,6 +248,7 @@ ipcMain.handle('upscale-video', async (event, {
         const useH265     = codecPreference === 'h265';
         const filterChain = buildFilterChain(resolution, denoiseStrength, sharpenStrength, hw.type);
         let command       = ffmpeg(inputPath);
+        const quality = String(Number.isFinite(Number(crf)) ? Number(crf) : (useH265 ? 20 : 17));
 
         if (hw.type === 'nvidia') {
             const videoCodec = (useH265 && hw.hevcNvencAvailable) ? 'hevc_nvenc' : 'h264_nvenc';
@@ -172,7 +260,7 @@ ipcMain.handle('upscale-video', async (event, {
                 .videoCodec(videoCodec)
                 .outputOptions('-preset', 'p4')
                 .outputOptions('-rc', 'vbr')
-                .outputOptions('-cq', useH265 ? '24' : '19');
+                .outputOptions('-cq', quality);
         }
         else if (hw.type === 'intel') {
             const videoCodec = (useH265 && hw.hevcQsvAvailable) ? 'hevc_qsv' : 'h264_qsv';
@@ -187,7 +275,7 @@ ipcMain.handle('upscale-video', async (event, {
                 .inputOptions('-hwaccel_output_format', 'qsv')
                 .outputOptions('-vf', filterChain)
                 .videoCodec(videoCodec)
-                .outputOptions('-global_quality', useH265 ? '24' : '20')
+                .outputOptions('-global_quality', quality)
                 .outputOptions('-look_ahead', '1');
         }
         else {
@@ -197,13 +285,19 @@ ipcMain.handle('upscale-video', async (event, {
                 .outputOptions('-vf', filterChain)
                 .videoCodec(videoCodec)
                 .outputOptions('-preset', 'slow')
-                .outputOptions('-crf', useH265 ? '20' : '17');
+                .outputOptions('-crf', quality);
         }
 
-        command
-            .output(outputPath)
+        if (audioMode === 'reencode') {
+            command.audioCodec('aac').audioBitrate('192k');
+        } else {
+            command.outputOptions('-c:a', 'copy');
+        }
+
+         activeCommand = command
+            .output(finalOutputPath)
             .on('progress', (progress) => {
-                const percent = Math.floor(progress.percent ?? 0);
+                const percent = Math.max(0, Math.min(100, Math.floor(progress.percent ?? 0)));
                 mainWindow.webContents.send('upscale-progress', {
                     percent,
                     currentFps: progress.currentFps ?? 0,
@@ -211,16 +305,23 @@ ipcMain.handle('upscale-video', async (event, {
                 });
             })
             .on('end', () => {
+                activeCommand = null;
+                activeReject = null;
                 mainWindow.webContents.send('upscale-progress', {
                     percent: 100, currentFps: 0, timemark: null
                 });
-                resolve({ success: true, outputPath });
+                sendCompletionNotification(finalOutputPath);
+                shell.showItemInFolder(finalOutputPath);
+                resolve({ success: true, outputPath: finalOutputPath });
             })
             .on('error', (err) => {
+                activeCommand = null;
+                activeReject = null;
                 console.error('[FFmpeg Error]:', err);
                 reject(err.message);
-            })
-            .run();
+            });
+
+        activeCommand.run();
     });
 });
 

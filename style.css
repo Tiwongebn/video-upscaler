@@ -497,3 +497,44 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #383838; }
+/* Output controls */
+.output-picker,
+.action-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.output-path {
+    min-width: 0;
+    flex: 1;
+    color: var(--text-secondary);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.secondary-btn {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s, opacity 0.12s;
+}
+.secondary-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent-text);
+}
+.secondary-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.35;
+}
+.secondary-btn.danger:hover:not(:disabled) {
+    border-color: #7a2c2c;
+    color: #ff7b7b;
+}

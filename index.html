@@ -70,6 +70,31 @@
             <p class="field-hint">H.265 = smaller files &nbsp;·&nbsp; H.264 = wider compatibility</p>
         </div>
 
+        <div class="field-group">
+            <label class="field-label">Audio</label>
+            <div class="seg-control">
+                <label class="seg-option">
+                    <input type="radio" name="audio" value="copy" checked>
+                    <span>Pass</span>
+                </label>
+                <label class="seg-option">
+                    <input type="radio" name="audio" value="reencode">
+                    <span>AAC</span>
+                </label>
+            </div>
+            <p class="field-hint">Pass keeps the original audio stream when possible</p>
+        </div>
+
+        <div class="field-group">
+            <label class="field-label" for="outputFormat">Format</label>
+            <select id="outputFormat" class="select-control">
+                <option value="source" selected>Keep source format</option>
+                <option value="mp4">Force MP4</option>
+                <option value="mkv">Force MKV</option>
+            </select>
+        </div>
+
+
         <div class="sidebar-divider"></div>
 
         <div class="field-group">
@@ -87,6 +112,16 @@
             </div>
             <input type="range" id="sharpen" min="0" max="3" step="0.1" value="1" class="range-control">
         </div>
+
+         <div class="field-group">
+            <div class="slider-header">
+                <label class="field-label" for="quality">Quality</label>
+                <span class="slider-value" id="qualityVal">20 CRF</span>
+            </div>
+            <input type="range" id="quality" min="14" max="30" step="1" value="20" class="range-control">
+            <p class="field-hint">Lower CRF = higher quality and larger files</p>
+        </div>
+
 
         <div class="sidebar-spacer"></div>
 
@@ -149,6 +184,16 @@
                 </div>
                 <p class="progress-meta" id="progressInfo"></p>
             </div>
+
+              <div class="output-picker">
+                <button id="outputBtn" class="secondary-btn">Choose output…</button>
+                <span id="outputPath" class="output-path">No output selected</span>
+            </div>
+            <div class="action-row">
+                <button id="cancelBtn" class="secondary-btn danger" disabled>Cancel</button>
+                <button id="openOutputBtn" class="secondary-btn" disabled>Open output folder</button>
+            </div>
+            
             <p class="status-message" id="status"></p>
         </section>
 
