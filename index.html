@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Video Upscaler</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="titlebar">
+    <span class="titlebar-title">Video Upscaler</span>
+    <div class="win-controls">
+        <button class="win-btn" id="winMinimize" title="Minimize">
+            <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+        </button>
+        <button class="win-btn" id="winMaximize" title="Maximize">
+            <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+        </button>
+        <button class="win-btn win-close" id="winClose" title="Close">
+            <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.2"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+    </div>
+</div>
+
+<div class="layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+
+        <div class="field-group">
+            <label class="field-label">Resolution</label>
+            <select id="resolution" class="select-control">
+                <option value="1280:720">720p — 1280×720</option>
+                <option value="1920:1080" selected>1080p — 1920×1080</option>
+                <option value="3840:2160">4K — 3840×2160</option>
+            </select>
+        </div>
+
+        <div class="field-group">
+            <label class="field-label">Acceleration</label>
+            <div class="seg-control">
+                <label class="seg-option">
+                    <input type="radio" name="accel" value="auto" checked>
+                    <span>Auto</span>
+                </label>
+                <label class="seg-option">
+                    <input type="radio" name="accel" value="hardware">
+                    <span>GPU</span>
+                </label>
+                <label class="seg-option">
+                    <input type="radio" name="accel" value="cpu">
+                    <span>CPU</span>
+                </label>
+            </div>
+            <p id="hwStatus" class="field-hint"></p>
+        </div>
+
+        <div class="field-group">
+            <label class="field-label">Codec</label>
+            <div class="seg-control">
+                <label class="seg-option">
+                    <input type="radio" name="codec" value="h265" checked>
+                    <span>H.265</span>
+                </label>
+                <label class="seg-option">
+                    <input type="radio" name="codec" value="h264">
+                    <span>H.264</span>
+                </label>
+            </div>
+            <p class="field-hint">H.265 = smaller files &nbsp;·&nbsp; H.264 = wider compatibility</p>
+        </div>
+
+        <div class="sidebar-divider"></div>
+
+        <div class="field-group">
+            <div class="slider-header">
+                <label class="field-label" for="denoise">Denoise</label>
+                <span class="slider-value" id="denoiseVal">2.0</span>
+            </div>
+            <input type="range" id="denoise" min="0" max="10" step="0.5" value="2" class="range-control">
+        </div>
+
+        <div class="field-group">
+            <div class="slider-header">
+                <label class="field-label" for="sharpen">Sharpen</label>
+                <span class="slider-value" id="sharpenVal">1.0</span>
+            </div>
+            <input type="range" id="sharpen" min="0" max="3" step="0.1" value="1" class="range-control">
+        </div>
+
+        <div class="sidebar-spacer"></div>
+
+        <p id="warningBanner" class="warning-banner" hidden></p>
+
+        <button id="upscaleBtn" class="upscale-btn">Upscale Video</button>
+
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+
+        <section class="main-section">
+            <h2 class="section-label">Source</h2>
+            <div id="dropZone" class="drop-zone">
+                <div class="drop-icon">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                </div>
+                <p class="drop-primary">Drop a video file here</p>
+                <p class="drop-secondary">MP4 · MOV · AVI · MKV · WEBM</p>
+                <button id="selectBtn" class="drop-btn">Browse files</button>
+            </div>
+        </section>
+
+        <section class="main-section">
+            <h2 class="section-label">File info</h2>
+            <div class="info-grid">
+                <div class="info-card">
+                    <span class="info-label">Filename</span>
+                    <span class="info-value" id="infoName">—</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">Duration</span>
+                    <span class="info-value" id="infoDuration">—</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">Source resolution</span>
+                    <span class="info-value" id="infoRes">—</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">File size</span>
+                    <span class="info-value" id="infoSize">—</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="main-section">
+            <h2 class="section-label">Output</h2>
+            <div class="progress-card">
+                <div class="progress-header">
+                    <span class="progress-label">Processing</span>
+                    <span class="progress-pct" id="progressText">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <p class="progress-meta" id="progressInfo"></p>
+            </div>
+            <p class="status-message" id="status"></p>
+        </section>
+
+    </main>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
