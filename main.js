@@ -28,6 +28,14 @@ const FORMAT_EXTENSIONS = {
     mkv: '.mkv',
 };
 
+const AI_MODELS = new Set([
+    'realesrgan-x4plus',
+    'realesrgan-x4plus-anime',
+    'realesr-animevideov3-x2',
+    'realesr-animevideov3-x3',
+    'realesr-animevideov3-x4',
+]);
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 900,
@@ -292,8 +300,7 @@ ipcMain.handle('ai-upscale-video', async (event, {
     return new Promise(async (resolve, reject) => {
         if (activeCommand) return reject('Another upscale is already running.');
 
-        const allowedModels = new Set(['realesrgan-x4plus', 'realesrgan-x4plus-anime']);
-        if (!allowedModels.has(modelName)) return reject('Unsupported AI model selected.');
+       if (!AI_MODELS.has(modelName)) return reject('Unsupported AI model selected.');
 
           const normalizedGpuId = String(vulkanGpuId ?? 'auto');
         const selectedGpuId = normalizedGpuId === 'auto'
@@ -309,6 +316,9 @@ ipcMain.handle('ai-upscale-video', async (event, {
         const { executable: esrganPath, models: modelsPath } = getRealEsrganPaths();
         if (!fs.existsSync(esrganPath)) return reject('Real-ESRGAN binary was not found in bin/win. Install realesrgan-ncnn-vulkan.exe before using AI upscale.');
         if (!fs.existsSync(modelsPath)) return reject('Real-ESRGAN models folder was not found in bin/win/models.');
+        if (!fs.existsSync(path.join(modelsPath, `${modelName}.param`)) || !fs.existsSync(path.join(modelsPath, `${modelName}.bin`))) {
+            return reject(`Selected AI model files were not found: ${modelName}.param and ${modelName}.bin.`);
+        }
 
         const tmpBase = path.join(os.tmpdir(), `esrgan_${process.pid}_${Date.now()}`);
         const framesDir = path.join(tmpBase, 'frames');
