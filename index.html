@@ -89,12 +89,19 @@
         <div class="field-group" id="aiOptions" style="display:none">
             <label class="field-label" for="aiModel">Model</label>
             <select id="aiModel" class="select-control">
-                <option value="realesrgan-x4plus">Real-ESRGAN x4 — Photo</option>
-                <option value="realesrgan-x4plus-anime">Real-ESRGAN x4 — Anime</option>
-                 <option value="realesr-animevideov3-x2">Real-ESRGAN AnimeVideo v3 x2</option>
-                <option value="realesr-animevideov3-x3">Real-ESRGAN AnimeVideo v3 x3</option>
-                <option value="realesr-animevideov3-x4">Real-ESRGAN AnimeVideo v3 x4</option>
+                <optgroup label="Live Action / Photo">
+                    <option value="realesrgan-x4plus">Real-ESRGAN x4 — Photo</option>
+                </optgroup>
+                <optgroup label="Anime Video (recommended)">
+                    <option value="realesr-animevideov3-x2">Anime Video v3 x2 — Fast</option>
+                    <option value="realesr-animevideov3-x3">Anime Video v3 x3</option>
+                    <option value="realesr-animevideov3-x4">Anime Video v3 x4 — Best</option>
+                </optgroup>
+                <optgroup label="Anime Image">
+                    <option value="realesrgan-x4plus-anime">Real-ESRGAN x4 — Anime</option>
+                </optgroup>
             </select>
+            <p class="field-hint" id="aiModelHint"></p>
 
              <label class="field-label" for="vulkanGpu">GPU Device</label>
             <select id="vulkanGpu" class="select-control">

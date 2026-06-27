@@ -38,6 +38,29 @@ document.getElementById('quality').addEventListener('input', e => {
     document.getElementById('qualityVal').textContent = `${e.target.value} CRF`;
 });
 document.getElementById('outputFormat').addEventListener('change', resetOutputSelection);
+document.getElementById('aiModel').addEventListener('change', updateAiHint);
+
+const MODEL_SCALE = {
+    'realesrgan-x4plus': 4,
+    'realesrgan-x4plus-anime': 4,
+    'realesr-animevideov3-x2': 2,
+    'realesr-animevideov3-x3': 3,
+    'realesr-animevideov3-x4': 4,
+};
+
+function updateAiHint() {
+    const model = document.getElementById('aiModel').value;
+    const scale = MODEL_SCALE[model] ?? 4;
+    const w = sourceInfo.width;
+    const h = sourceInfo.height;
+    const hint = document.getElementById('aiModelHint');
+    if (!hint) return;
+    if (w && h) {
+        hint.textContent = `Output: ${w * scale} × ${h * scale} (${scale}x upscale)`;
+    } else {
+        hint.textContent = `${scale}x upscale — load a file to see output resolution`;
+    }
+}
 
 // ── Hardware detection on load ──
 const HW_LABELS = {
@@ -113,6 +136,8 @@ let sourceInfo = {};
 let lastOutputPath = null;
 
 const VALID_EXTS = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
+
+updateAiHint();
 
 function formatBytes(bytes) {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -200,6 +225,7 @@ function populateFileInfo(filePath) {
             infoRes.textContent = `${info.width} × ${info.height}`;
             infoRes.classList.add('populated');
         }
+        updateAiHint();
     }).catch(() => {
         infoDuration.textContent = 'Unknown';
         infoRes.textContent = 'Unknown';
@@ -214,6 +240,7 @@ function handleFile(filePath) {
     }
     selectedFilePath = filePath;
     sourceInfo = {};
+    updateAiHint();
     resetOutputSelection();
     setStatus('', '');
     populateFileInfo(filePath);
