@@ -360,25 +360,51 @@ ipcMain.handle('ai-upscale-video', async (event, {
             });
 
             sendAiProgress('upscaling', 0, 'Starting AI upscale...');
-            await new Promise((res, rej) => {
-                  console.log(`[Real-ESRGAN] Vulkan GPU device: ${selectedGpuId}`);
-                const args = ['-i', framesDir, '-o', upscaledDir, '-n', modelName, '-m', modelsPath, '-f', 'jpg', '-g', selectedGpuId].map(String);
-                const proc = spawn(esrganPath, args, { windowsHide: true });
-                activeCommand = proc;
-                let lastPct = 0;
-                proc.stderr.on('data', (data) => {
-                    const match = data.toString().match(/([\d.]+)%/);
-                    if (!match) return;
-                    const pct = Math.min(Math.floor(parseFloat(match[1])), 99);
-                    if (pct !== lastPct) {
-                        lastPct = pct;
-                        sendAiProgress('upscaling', pct, `Upscaling frame ${Math.floor((pct / 100) * totalFrames)} of ${totalFrames}`);
-                    }
-                });
-                proc.on('error', rej);
-                proc.on('close', (code) => code === 0 ? res() : rej(new Error(`Real-ESRGAN exited with code ${code}`)));
-            });
-            activeCommand = null;
+await new Promise((res, rej) => {
+    console.log(`[Real-ESRGAN] Vulkan GPU device: ${selectedGpuId}`);
+    const args = ['-i', framesDir, '-o', upscaledDir, '-n', modelName, '-m', modelsPath, '-f', 'jpg', '-g', selectedGpuId].map(String);
+    const proc = spawn(esrganPath, args, { windowsHide: true });
+    activeCommand = proc;
+
+    let completedFrames = 0;
+    let lastPct = 0;
+
+    const handleOutput = (data) => {
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+            const match = line.match(/([\d]+[.,][\d]+)%|^([\d]+)%/);
+            if (!match) continue;
+
+            const raw = (match[1] || match[2]).replace(',', '.');
+            const pct = parseFloat(raw);
+            if (!Number.isFinite(pct)) continue;
+
+            // Detect frame completion: percentage resets back near zero
+            if (lastPct >= 80 && pct < 10) {
+                completedFrames++;
+            }
+            lastPct = pct;
+
+            // Overall = completed frames + fractional progress through current frame
+            const overall = Math.min(99, Math.floor(
+                ((completedFrames + pct / 100) / totalFrames) * 100
+            ));
+
+            sendAiProgress('upscaling', overall,
+                `Upscaling frame ${completedFrames + 1} of ${totalFrames} (${Math.round(pct)}%)`);
+        }
+    };
+
+    proc.stderr.on('data', handleOutput);
+    proc.stdout.on('data', handleOutput);
+
+    proc.on('error', rej);
+    proc.on('close', (code) => {
+        console.log('[ESRGAN exit code]:', code);
+        code === 0 ? res() : rej(new Error(`Real-ESRGAN exited with code ${code}`));
+    });
+});
+activeCommand = null;
 
             sendAiProgress('assembling', 0, 'Reassembling video...');
             const useH265 = codecPreference === 'h265';
